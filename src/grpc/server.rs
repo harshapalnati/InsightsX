@@ -2,6 +2,9 @@ use tonic::{transport::Server, Request, Response, Status, Streaming};
 use std::net::SocketAddr;
 use tracing::{info, error, warn};
 use tokio_stream::StreamExt; // For handling gRPC streaming
+use crate::kafka::producer::KafkaProducer;
+use serde_json;
+use prost::Message;  // <-- add this import
 
 // Import generated gRPC code from logs.proto
 pub mod logs {
@@ -15,33 +18,38 @@ use logs::{Ack, LogEntry};
 #[derive(Debug, Default)]
 pub struct MyLogService;
 
+
+
+
+
 #[tonic::async_trait]
 impl LogService for MyLogService {
     async fn stream_logs(
         &self,
         request: Request<Streaming<LogEntry>>,
     ) -> Result<Response<Ack>, Status> {
-        println!("📥 Received gRPC request for log streaming."); // ✅ Now visible in Docker
+        let config = crate::config::AppConfig::from_env();
+        let mut kafka_producer = KafkaProducer::new(&config.kafka_brokers, &config.kafka_topic);
 
         let mut stream = request.into_inner();
-        
-        while let Some(log) = stream.next().await {
-            match log {
-                Ok(entry) => {
-                    println!("✅ Received log: {:?}", entry); // ✅ Now visible in Docker
-                }
-                Err(e) => println!("⚠️ Error receiving log: {}", e),
-            }
+
+        while let Some(log) = stream.message().await? {
+            let mut buf = Vec::new();
+
+            // Clearly serialize the entry with Prost
+            log.encode(&mut buf).map_err(|e| {
+                Status::internal(format!("Protobuf serialization error: {}", e))
+            })?;
+
+            kafka_producer.send(&buf).map_err(|e| {
+                Status::internal(format!("Kafka sending error: {}", e))
+            })?;
         }
 
-        let response = Ack {
+        Ok(Response::new(Ack {
             success: true,
-            message: "✅ Logs received successfully".to_string(),
-        };
-
-        println!("🚀 Sending response: {:?}", response); // ✅ Now visible in Docker
-
-        Ok(Response::new(response))
+            message: "Logs successfully sent to Kafka".into(),
+        }))
     }
 }
 

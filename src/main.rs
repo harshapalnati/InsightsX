@@ -1,6 +1,7 @@
 mod grpc;
 mod models;
 mod config;
+mod kafka;
 
 #[tokio::main]
 async fn main() {
