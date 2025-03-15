@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package logs;
+
+message LogEntry {
+  string source = 1;
+  string level = 2;
+  string message = 3;
+  int64 timestamp = 4;
+  map<string, string> metadata = 5;
+}
+
+message Ack {
+  bool success = 1;
+  string message = 2;
+}
+
+service LogService {
+  rpc StreamLogs(stream LogEntry) returns (Ack);
+}
