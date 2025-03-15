@@ -11,4 +11,25 @@ async fn main() {
     grpc::server::start_grpc_server(&config.grpc_address)
         .await
         .expect("Failed to start gRPC server");
+
+
+
+        let config = config::AppConfig::from_env();
+
+    // Spawn gRPC server clearly as separate task
+    tokio::spawn(async move {
+        grpc::server::start_grpc_server(&config.grpc_address)
+            .await
+            .expect("Failed to start gRPC server");
+    });
+
+    // Kafka Consumer clearly defined
+    let mut kafka_consumer = kafka::consumer::KafkaConsumer::new(
+        vec![config.kafka_brokers.clone()],
+        &config.kafka_topic, // <-- fixed clearly
+    );
+
+    kafka_consumer.consume(|msg| {
+        println!("Consumed message: {:?}", msg);
+    });
 }
