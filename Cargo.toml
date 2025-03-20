@@ -3,22 +3,39 @@ name = "insightsx"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "log_consumer"
+path = "src/bin/log_consumer.rs"
+
+[[bin]]
+name = "insightsx"
+path = "src/main.rs"
+
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"
+
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 bincode = "2.0.1"
 serde_json = "1"
-kafka = "0.10.0" # replaces rdkafka completely
+kafka = "0.10.0"
 bytes = "1"
 prost = "0.13.5"
-tonic = "0.12.3" 
+tonic = { version = "0.12.3", features = ["prost"] }
+prost-types = "0.13.5"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tracing-appender = "0.2"
 prometheus = "0.13"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4.40", features = ["serde"] }
 tokio-stream = "0.1" 
-
+snap = "1.0"
+rmp-serde = "1" # ✅ MessagePack Serialization
+futures = "0.3"
+rayon = "1.8"
 
 [build-dependencies]
 tonic-build = "0.12.3"

@@ -1,33 +1,70 @@
 version: "3.8"
 
 services:
+  # 🚀 InsightsX gRPC Server
   insightsx:
     build: .
     ports:
-      - "3000:3000"
       - "50051:50051"
     environment:
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC: insightx-logs
       GRPC_ADDRESS: 0.0.0.0:50051
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy  # ✅ Ensures Kafka is fully ready
 
+  # 🔄 Kafka Log Consumer Service
+  log_consumer:
+    build: .
+    command: [ "sh", "-c", "sleep 5 && ./log_consumer" ]  # ✅ Prevents race condition
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: insightx-logs
+    depends_on:
+      kafka:
+        condition: service_healthy  # ✅ Ensures Kafka is fully ready
+
+  # 📈 Benchmark for Performance Testing
+  benchmark:
+    build: .
+    command: [ "./benchmark" ]
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # 🏢 Kafka Broker
   kafka:
     image: bitnami/kafka:latest
     environment:
-      ALLOW_PLAINTEXT_LISTENER: yes
-      KAFKA_CFG_NODE_ID: 1
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true" # clearly enables auto-create topic
-      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CFG_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://0.0.0.0:9092"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT"
+      KAFKA_CFG_BROKER_ID: 1
     ports:
       - "9092:9092"
     depends_on:
       - zookeeper
+    healthcheck:  # ✅ Ensures Kafka is actually running before consumers connect
+      test: ["CMD", "kafka-topics.sh", "--list", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      retries: 5
+      start_period: 10s
+      timeout: 5s
 
+  # 🗂️ Zookeeper for Kafka Coordination
   zookeeper:
     image: bitnami/zookeeper:latest
     environment:
-      ALLOW_ANONYMOUS_LOGIN: yes
+      ALLOW_ANONYMOUS_LOGIN: "yes"
     ports:
       - "2181:2181"
+    healthcheck:  # ✅ Ensures Zookeeper is actually ready
+      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181"]
+      interval: 10s
+      retries: 5
+      start_period: 10s
+      timeout: 5s
