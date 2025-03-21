@@ -1,8 +1,10 @@
+// src/kafka/consumer.rs
+
 use kafka::consumer::{Consumer, FetchOffset, GroupOffsetStorage};
 use std::time::Duration;
 use rmp_serde::from_slice;
 use crate::models::log_entry::{LogEntry, LogLevel};
-use rayon::prelude::*;
+use chrono::Utc;
 
 pub struct KafkaConsumer {
     consumer: Consumer,
@@ -17,7 +19,7 @@ impl KafkaConsumer {
             .with_group("insightx-group".to_owned())
             .with_fallback_offset(FetchOffset::Earliest)
             .with_offset_storage(Some(GroupOffsetStorage::Kafka))
-            .with_fetch_max_wait_time(Duration::from_millis(200)) // You might reduce this for more responsiveness
+            .with_fetch_max_wait_time(Duration::from_millis(200))
             .with_fetch_min_bytes(1)
             .create()
             .expect("🔥 Consumer creation failed! Check Kafka connection.");
@@ -26,38 +28,45 @@ impl KafkaConsumer {
         Self { consumer }
     }
 
-    // Changed the handler to be Fn instead of FnMut to ease parallelism
-    pub fn consume<F>(&mut self, handler: F)
+    /// Continuously polls Kafka and processes each message using the provided handler.
+    /// The handler receives a reference to a `LogEntry`.
+    pub fn consume<F>(&mut self, mut handler: F)
     where
-        F: Fn(&LogEntry) + Sync + Send,
+        F: FnMut(&LogEntry),
     {
         println!("🚀 Kafka Consumer started listening...");
 
         loop {
             match self.consumer.poll() {
                 Ok(message_sets) => {
-                    // Use the iterator provided by message_sets (if available)
-                    let message_sets_vec: Vec<_> = message_sets.iter().collect();
-                    message_sets_vec.into_par_iter().for_each(|ms| {
+                    // Iterate over each message set in the batch.
+                    for ms in message_sets.iter() {
                         for m in ms.messages() {
-                            let log_entry: LogEntry = from_slice(m.value).unwrap_or_else(|_| {
+                            // Attempt to deserialize the message.
+                            let log_entry: LogEntry = from_slice(m.value).unwrap_or_else(|err| {
+                                eprintln!("❌ Failed to deserialize message: {}. Using fallback.", err);
                                 LogEntry {
                                     source: "Unknown".to_string(),
                                     level: LogLevel::ERROR,
                                     message: "Corrupted log entry".to_string(),
-                                    timestamp: chrono::Utc::now().timestamp_millis(),
+                                    timestamp: Utc::now().timestamp_millis(),
+                                    trace_id: None,
+                                    span_id: None,
+                                    service: None,
                                     metadata: None,
                                 }
                             });
+                            // Process the log entry using the provided handler.
                             handler(&log_entry);
                         }
-                    });
+                    }
                 }
                 Err(e) => {
                     eprintln!("❌ Error polling messages from Kafka: {}", e);
+                    // Sleep briefly to avoid busy-looping on errors.
+                    std::thread::sleep(Duration::from_millis(100));
                 }
             }
-            
         }
     }
 }

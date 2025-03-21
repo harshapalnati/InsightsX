@@ -1,29 +1,30 @@
 version: "3.8"
 
 services:
-  # 🚀 InsightsX gRPC Server
+  # 🚀 InsightsX gRPC Server (with metrics endpoint)
   insightsx:
     build: .
     ports:
       - "50051:50051"
+      - "9898:9898"        # Exposes the Prometheus metrics endpoint
     environment:
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC: insightx-logs
       GRPC_ADDRESS: 0.0.0.0:50051
     depends_on:
       kafka:
-        condition: service_healthy  # ✅ Ensures Kafka is fully ready
+        condition: service_healthy
 
   # 🔄 Kafka Log Consumer Service
   log_consumer:
     build: .
-    command: [ "sh", "-c", "sleep 5 && ./log_consumer" ]  # ✅ Prevents race condition
+    command: [ "sh", "-c", "sleep 5 && ./log_consumer" ]
     environment:
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC: insightx-logs
     depends_on:
       kafka:
-        condition: service_healthy  # ✅ Ensures Kafka is fully ready
+        condition: service_healthy
 
   # 📈 Benchmark for Performance Testing
   benchmark:
@@ -48,7 +49,7 @@ services:
       - "9092:9092"
     depends_on:
       - zookeeper
-    healthcheck:  # ✅ Ensures Kafka is actually running before consumers connect
+    healthcheck:
       test: ["CMD", "kafka-topics.sh", "--list", "--bootstrap-server", "localhost:9092"]
       interval: 10s
       retries: 5
@@ -62,9 +63,25 @@ services:
       ALLOW_ANONYMOUS_LOGIN: "yes"
     ports:
       - "2181:2181"
-    healthcheck:  # ✅ Ensures Zookeeper is actually ready
+    healthcheck:
       test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181"]
       interval: 10s
       retries: 5
       start_period: 10s
       timeout: 5s
+
+  # 📊 Prometheus for Metrics Scraping
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  # 📈 Grafana for Visualization
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus

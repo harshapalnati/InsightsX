@@ -14,11 +14,14 @@ pub struct LogEntry {
     pub source: String,
     pub level: LogLevel,
     pub message: String,
-    pub timestamp: i64, // ✅ Change from `Option<Timestamp>` to `i64`
+    pub timestamp: i64,
+    // New fields for enrichment:
+    pub trace_id: Option<String>,
+    pub span_id: Option<String>,
+    pub service: Option<String>,
     pub metadata: Option<HashMap<String, String>>,
 }
 
-// ✅ Helper function to get current timestamp
 impl LogEntry {
     pub fn current_timestamp() -> i64 {
         chrono::Utc::now().timestamp_millis()

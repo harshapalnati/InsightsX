@@ -45,9 +45,12 @@ impl LogService for MyLogService {
                                 },
                                 message: grpc_log.message,
                                 timestamp: grpc_log.timestamp,
+                                trace_id: Some("trace-1234".into()),   // Example static trace ID; replace with dynamic value
+                                span_id: Some("span-5678".into()),       // Example static span ID; replace with dynamic value
+                                service: Some("insightsx-service".into()), // Your service name
                                 metadata: None,
                             };
-
+                            
                             let serialized_log = rmp_serde::to_vec(&log_entry)
                                 .map_err(|e| Status::internal(format!("Serialization error: {}", e)))?;
                             

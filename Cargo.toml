@@ -26,16 +26,22 @@ bytes = "1"
 prost = "0.13.5"
 tonic = { version = "0.12.3", features = ["prost"] }
 prost-types = "0.13.5"
+opentelemetry = "0.28.0"
+opentelemetry-jaeger = "0.22.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tracing-appender = "0.2"
-prometheus = "0.13"
+tracing-opentelemetry = "0.29.0"
 chrono = { version = "0.4.40", features = ["serde"] }
 tokio-stream = "0.1" 
 snap = "1.0"
-rmp-serde = "1" # ✅ MessagePack Serialization
+rmp-serde = "1"
 futures = "0.3"
 rayon = "1.8"
+prometheus = "0.13.4"
+warp = "0.3"
+lazy_static = "1.4"
+
 
 [build-dependencies]
 tonic-build = "0.12.3"
