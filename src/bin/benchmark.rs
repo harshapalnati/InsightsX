@@ -12,7 +12,7 @@ fn main() {
         10,
     )));
 
-    let num_messages = 1_000_000;
+    let num_messages = 5_000_000;
     let start_time = Instant::now();
 
     (0..num_messages).into_par_iter().for_each(|i| {

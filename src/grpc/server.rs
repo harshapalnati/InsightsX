@@ -1,12 +1,10 @@
 use tonic::{transport::Server, Request, Response, Status, Streaming};
 use std::net::SocketAddr;
 use tracing::{info, error};
+use tokio::time::{self, Duration};
 use crate::kafka::producer::KafkaProducer;
-use rmp_serde::{to_vec, from_slice};
-use snap::raw::Encoder;
+use rmp_serde;
 use crate::models::log_entry::{LogEntry, LogLevel};
-use chrono::{TimeZone, Utc};
-
 
 pub mod logs {
     tonic::include_proto!("logs");
@@ -18,7 +16,6 @@ use logs::log_service_server::{LogService, LogServiceServer};
 #[derive(Debug, Default)]
 pub struct MyLogService;
 
-
 #[tonic::async_trait]
 impl LogService for MyLogService {
     async fn stream_logs(
@@ -29,41 +26,57 @@ impl LogService for MyLogService {
         let mut kafka_producer = KafkaProducer::new(&config.kafka_brokers, &config.kafka_topic, 10);
 
         let mut stream = request.into_inner();
-        let mut batch = Vec::new();
+        // Flush interval set to 100ms (adjustable as needed)
+        let mut flush_interval = time::interval(Duration::from_millis(100));
 
-        while let Some(grpc_log) = stream.message().await? {
-            let log_entry = LogEntry {
-                source: grpc_log.source,
-                level: match grpc_log.level.as_str() {
-                    "INFO" => LogLevel::INFO,
-                    "WARN" => LogLevel::WARN,
-                    "ERROR" => LogLevel::ERROR,
-                    "DEBUG" => LogLevel::DEBUG,
-                    _ => LogLevel::INFO, // Default
+        loop {
+            tokio::select! {
+                maybe_msg = stream.message() => {
+                    match maybe_msg {
+                        Ok(Some(grpc_log)) => {
+                            let log_entry = LogEntry {
+                                source: grpc_log.source,
+                                level: match grpc_log.level.as_str() {
+                                    "INFO" => LogLevel::INFO,
+                                    "WARN" => LogLevel::WARN,
+                                    "ERROR" => LogLevel::ERROR,
+                                    "DEBUG" => LogLevel::DEBUG,
+                                    _ => LogLevel::INFO,
+                                },
+                                message: grpc_log.message,
+                                timestamp: grpc_log.timestamp,
+                                metadata: None,
+                            };
+
+                            let serialized_log = rmp_serde::to_vec(&log_entry)
+                                .map_err(|e| Status::internal(format!("Serialization error: {}", e)))?;
+                            
+                            // Compress the serialized log (only once)
+                            let compressed_log = compress_data(&serialized_log);
+                            
+                            // Asynchronously send the compressed log
+                            kafka_producer.send(&compressed_log).await;
+                        },
+                        Ok(None) => break, // End of stream
+                        Err(e) => {
+                            return Err(Status::internal(format!("Error receiving message: {}", e)));
+                        },
+                    }
                 },
-                message: grpc_log.message,
-                timestamp: grpc_log.timestamp,  // ✅ FIXED: Use prost Timestamp directly
-                metadata: None,
-            };
-
-            let serialized_log = rmp_serde::to_vec(&log_entry)
-                .map_err(|e| Status::internal(format!("Serialization error: {}", e)))?;
-
-            let compressed_log = compress_data(&serialized_log);
-            batch.push(compressed_log);
-
-            if batch.len() >= 10 {
-                kafka_producer.flush();
+                _ = flush_interval.tick() => {
+                    // Periodically flush any pending messages
+                    kafka_producer.flush().await;
+                },
             }
         }
-
-        kafka_producer.flush();
+        // Final flush in case any messages remain
+        kafka_producer.flush().await;
         Ok(Response::new(Ack { success: true, message: "Logs sent successfully".into() }))
     }
 }
 
 fn compress_data(data: &[u8]) -> Vec<u8> {
-    let mut encoder = Encoder::new();
+    let mut encoder = snap::raw::Encoder::new();
     encoder.compress_vec(data).expect("Compression failed")
 }
 
