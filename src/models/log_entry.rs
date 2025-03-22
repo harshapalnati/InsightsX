@@ -20,6 +20,7 @@ pub struct LogEntry {
     pub span_id: Option<String>,
     pub service: Option<String>,
     pub metadata: Option<HashMap<String, String>>,
+    pub log_type: Option<String>, // Changed from Option<_> to Option<String>
 }
 
 impl LogEntry {

@@ -1,10 +1,10 @@
-// src/kafka/consumer.rs
-
 use kafka::consumer::{Consumer, FetchOffset, GroupOffsetStorage};
 use std::time::Duration;
 use rmp_serde::from_slice;
 use crate::models::log_entry::{LogEntry, LogLevel};
 use chrono::Utc;
+use std::sync::Arc;
+use crate::storage::clickhouse::LogStorage;
 
 pub struct KafkaConsumer {
     consumer: Consumer,
@@ -39,10 +39,8 @@ impl KafkaConsumer {
         loop {
             match self.consumer.poll() {
                 Ok(message_sets) => {
-                    // Iterate over each message set in the batch.
                     for ms in message_sets.iter() {
                         for m in ms.messages() {
-                            // Attempt to deserialize the message.
                             let log_entry: LogEntry = from_slice(m.value).unwrap_or_else(|err| {
                                 eprintln!("❌ Failed to deserialize message: {}. Using fallback.", err);
                                 LogEntry {
@@ -54,19 +52,37 @@ impl KafkaConsumer {
                                     span_id: None,
                                     service: None,
                                     metadata: None,
+                                    log_type: None,
                                 }
                             });
-                            // Process the log entry using the provided handler.
                             handler(&log_entry);
                         }
                     }
                 }
                 Err(e) => {
                     eprintln!("❌ Error polling messages from Kafka: {}", e);
-                    // Sleep briefly to avoid busy-looping on errors.
                     std::thread::sleep(Duration::from_millis(100));
                 }
             }
         }
     }
+}
+
+/// Spawns a Kafka consumer in a blocking task that reads logs and writes them to ClickHouse.
+/// The function now takes owned `String` values for brokers and topic.
+pub async fn start_kafka_consumer(brokers: String, topic: String, storage: Arc<LogStorage>) {
+    tokio::task::spawn_blocking(move || {
+        let mut consumer = KafkaConsumer::new(vec![brokers], &topic);
+        consumer.consume(|log_entry| {
+            let storage_clone = storage.clone();
+            let log_entry = log_entry.clone(); // Clone for moving into async task
+            tokio::spawn(async move {
+                if let Err(e) = storage_clone.insert_log(&log_entry).await {
+                    eprintln!("Failed to insert log into ClickHouse: {:?}", e);
+                }
+            });
+        });
+    })
+    .await
+    .expect("Kafka consumer task panicked");
 }

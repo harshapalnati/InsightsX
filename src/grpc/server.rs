@@ -6,6 +6,7 @@ use crate::kafka::producer::KafkaProducer;
 use rmp_serde;
 use crate::models::log_entry::{LogEntry, LogLevel};
 
+
 pub mod logs {
     tonic::include_proto!("logs");
 }
@@ -34,6 +35,7 @@ impl LogService for MyLogService {
                 maybe_msg = stream.message() => {
                     match maybe_msg {
                         Ok(Some(grpc_log)) => {
+                            // Create a LogEntry from grpc_log data
                             let log_entry = LogEntry {
                                 source: grpc_log.source,
                                 level: match grpc_log.level.as_str() {
@@ -45,12 +47,13 @@ impl LogService for MyLogService {
                                 },
                                 message: grpc_log.message,
                                 timestamp: grpc_log.timestamp,
-                                trace_id: Some("trace-1234".into()),   // Example static trace ID; replace with dynamic value
-                                span_id: Some("span-5678".into()),       // Example static span ID; replace with dynamic value
-                                service: Some("insightsx-service".into()), // Your service name
+                                trace_id: Some("trace-1234".into()),       // Replace with dynamic value as needed
+                                span_id: Some("span-5678".into()),           // Replace with dynamic value as needed
+                                service: Some("insightsx-service".into()),   // Your service name
                                 metadata: None,
+                                log_type: Some("grpc".into()),
                             };
-                            
+
                             let serialized_log = rmp_serde::to_vec(&log_entry)
                                 .map_err(|e| Status::internal(format!("Serialization error: {}", e)))?;
                             
@@ -83,11 +86,11 @@ fn compress_data(data: &[u8]) -> Vec<u8> {
     encoder.compress_vec(data).expect("Compression failed")
 }
 
-/// Starts the gRPC server on a given address
+/// Starts the gRPC server on a given address.
 pub async fn start_grpc_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let socket_addr: SocketAddr = addr.parse().expect("❌ Invalid address format");
+    let socket_addr: SocketAddr = addr.parse().expect("Invalid address format");
 
-    info!("🚀 Starting gRPC server on {}", socket_addr);
+    info!("Starting gRPC server on {}", socket_addr);
 
     let service = LogServiceServer::new(MyLogService::default());
 
@@ -96,7 +99,7 @@ pub async fn start_grpc_server(addr: &str) -> Result<(), Box<dyn std::error::Err
         .serve(socket_addr)
         .await
         .map_err(|e| {
-            error!("❌ Failed to start gRPC server: {}", e);
+            error!("Failed to start gRPC server: {}", e);
             Box::new(e) as Box<dyn std::error::Error>
         })
 }
