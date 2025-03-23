@@ -8,13 +8,13 @@ pub mod storage;
 
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::info;
-use models::log_entry::LogEntry;
+use tracing::{info, error};
+use models::log_entry::{LogEntry, LogLevel};
 use storage::clickhouse::LogStorage;
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing and metrics
+    // Initialize tracing and metrics.
     observability::tracing::init_tracing();
     info!("Tracing initialized");
 
@@ -23,29 +23,47 @@ async fn main() {
     });
     info!("Metrics server running on http://0.0.0.0:9898/metrics");
 
-    // Load app configuration
+    // Load application configuration.
     let config = config::AppConfig::from_env();
 
-    // Initialize ClickHouse Cloud storage
-    // Note that the URL includes https:// to enable secure connection
+    // Initialize ClickHouse storage.
     info!("🔄 Initializing ClickHouse storage...");
     let storage = Arc::new(LogStorage::new(
-        "https://i0zbyfvwa7.us-east-1.aws.clickhouse.cloud:8443", 
+        "https://i0zbyfvwa7.us-east-1.aws.clickhouse.cloud:8443",
         "default",
         "yq3ELB.ONGWE_",
     ));
-   
+
     if let Err(e) = storage.init_table().await {
         eprintln!("❌ Failed to initialize ClickHouse table: {:?}", e);
     } else {
         info!("✅ ClickHouse table initialized successfully!");
     }
 
-    // Create centralized log channel
+    // --- Manual Test Insert ---
+    let test_log = LogEntry {
+        source: "manual_test".into(),
+        level: LogLevel::INFO,
+        message: "Manual test message".into(),
+        client_timestamp: LogEntry::current_timestamp(),
+        server_timestamp: Some(LogEntry::current_timestamp()),
+        trace_id: None,
+        span_id: None,
+        service: None,
+        metadata: None,
+        log_type: None,
+    };
+    
+    match storage.insert_log(&test_log).await {
+        Ok(_)  => info!("Manual insert succeeded"),
+        Err(e) => error!("Manual insert failed: {:?}", e),
+    }
+  
+    // Create a centralized channel for log entries.
     let (tx, rx) = mpsc::channel::<LogEntry>(10_000);
     let tx = Arc::new(tx);
 
-    // Ingestion protocol handlers
+    // Start ingestion endpoints.
     let tcp_tx = tx.clone();
     tokio::spawn(async move {
         ingestion::tcp::start_tcp_server("0.0.0.0:6000", tcp_tx).await;
@@ -68,17 +86,17 @@ async fn main() {
     tokio::spawn(async move {
         ingestion::http::run_ingest_api(http_tx).await;
     });
-    info!("✅ HTTP ingestion API started");
+    info!("✅ HTTP ingestion API started on port 8080");
 
-    // Kafka producer
+    // Initialize Kafka producer.
     let mut kafka_producer = kafka::producer::KafkaProducer::new(
         &config.kafka_brokers,
         &config.kafka_topic,
-        20,
+        1, // Lower batch size for testing.
     );
     info!("✅ Kafka producer initialized for topic: {}", config.kafka_topic);
 
-    // Log stream -> Kafka
+    // Forward logs from the centralized channel to Kafka.
     let mut rx = rx;
     tokio::spawn(async move {
         info!("🚀 Starting log stream to Kafka pipeline");
@@ -90,7 +108,7 @@ async fn main() {
         kafka_producer.flush().await;
     });
 
-    // Kafka -> ClickHouse
+    // Start Kafka consumer to insert logs into ClickHouse.
     let kafka_brokers = config.kafka_brokers.clone();
     let kafka_topic = config.kafka_topic.clone();
     let storage_clone = storage.clone();
@@ -99,12 +117,12 @@ async fn main() {
         kafka::consumer::start_kafka_consumer(kafka_brokers, kafka_topic, storage_clone).await;
     });
 
-    // gRPC server
+    // Start gRPC server.
     let grpc_addr = config.grpc_address.clone();
     tokio::spawn(async move {
         info!("🔄 Starting gRPC server on {}", grpc_addr);
         if let Err(e) = grpc::server::start_grpc_server(&grpc_addr).await {
-            tracing::error!("❌ gRPC server failed: {}", e);
+            error!("❌ gRPC server failed: {}", e);
         }
     });
 

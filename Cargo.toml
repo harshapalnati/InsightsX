@@ -26,7 +26,7 @@ bytes = "1"
 prost = "0.13.5"
 tonic = { version = "0.12.3", features = ["prost"] }
 prost-types = "0.13.5"
-opentelemetry = "0.28.0"
+opentelemetry = "0.29.0"
 opentelemetry-jaeger = "0.22.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"

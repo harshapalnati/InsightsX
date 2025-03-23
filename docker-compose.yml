@@ -5,9 +5,9 @@ services:
   insightsx:
     build: .
     ports:
-      - "50051:50051"
-      - "9898:9898"        # Exposes the Prometheus metrics endpoint
-      - "8080:8080"
+      - "50051:50051"   # gRPC
+      - "9898:9898"     # Prometheus metrics
+      - "8080:8080"     # HTTP testing/debug
     environment:
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC: insightx-logs
@@ -15,19 +15,22 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      
 
-  # 🔄 Kafka Log Consumer Service
+  # 🔄 Kafka Log Consumer
   log_consumer:
     build: .
     command: [ "sh", "-c", "sleep 5 && ./log_consumer" ]
     environment:
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC: insightx-logs
+   
     depends_on:
       kafka:
         condition: service_healthy
+      
 
-  # 📈 Benchmark for Performance Testing
+  # ⚙️ Benchmark Utility
   benchmark:
     build: .
     command: [ "./benchmark" ]
@@ -35,16 +38,17 @@ services:
       kafka:
         condition: service_healthy
 
+
   # 🏢 Kafka Broker
   kafka:
     image: bitnami/kafka:latest
     environment:
       ALLOW_PLAINTEXT_LISTENER: "yes"
       KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_CFG_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_CFG_LISTENERS: "PLAINTEXT://0.0.0.0:9092"
-      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT"
+      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CFG_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_CFG_BROKER_ID: 1
     ports:
       - "9092:9092"
@@ -57,7 +61,7 @@ services:
       start_period: 10s
       timeout: 5s
 
-  # 🗂️ Zookeeper for Kafka Coordination
+  # 🧠 Zookeeper
   zookeeper:
     image: bitnami/zookeeper:latest
     environment:
@@ -71,7 +75,7 @@ services:
       start_period: 10s
       timeout: 5s
 
-  # 📊 Prometheus for Metrics Scraping
+  # 📊 Prometheus for Metrics
   prometheus:
     image: prom/prometheus:latest
     ports:
@@ -79,7 +83,7 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
 
-  # 📈 Grafana for Visualization
+  # 📈 Grafana for Dashboard
   grafana:
     image: grafana/grafana:latest
     ports:
