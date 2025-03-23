@@ -1,36 +1,46 @@
-# Stage 1: Build the Rust application
+# 🌍 Use latest Rust version
 FROM rust:latest AS builder
 
-# Set working directory
+# ✅ Install protobuf compiler
+RUN apt-get update && \
+    apt-get install -y protobuf-compiler && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /usr/src/insightsx
 
-# Install required dependencies
-RUN apt-get update && apt-get install -y protobuf-compiler
-
-# Cache dependencies clearly
+# ✅ Copy Cargo files first for dependency caching
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs
+
+# ✅ Create dummy src structure for dependency compilation
+RUN mkdir -p src/bin
+RUN echo "fn main() {}" > src/main.rs
+RUN echo "fn main() {}" > src/bin/log_consumer.rs
+RUN echo "fn main() {}" > src/bin/benchmark.rs  # <-- Ensures this dummy file exists
+
+# ✅ Build dependencies only (does NOT include real source code yet)
 RUN cargo build --release
 
-# Copy project files
+# ✅ Now copy the REAL source code (including `benchmark.rs`)
 COPY . .
 
-# Build application (optimized)
+# ✅ Explicitly build the actual binaries (including `benchmark`)
 RUN cargo build --release --bin insightsx
+RUN cargo build --release --bin log_consumer
+RUN cargo build --release --bin benchmark  # <-- Ensures benchmark is built
 
-# Stage 2: Create minimal final runtime image
+# ✅ Deploy minimal runtime image
 FROM debian:bookworm-slim
-
 WORKDIR /usr/local/bin
 
-# Install required dependencies (if necessary, e.g., for TLS, networking)
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+# ✅ Install required runtime dependencies
+RUN apt-get update && \
+    apt-get install -y libssl-dev ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy compiled binary
 COPY --from=builder /usr/src/insightsx/target/release/insightsx .
+COPY --from=builder /usr/src/insightsx/target/release/log_consumer .
+COPY --from=builder /usr/src/insightsx/target/release/benchmark .  
 
-# Expose port (update based on your configuration)
-EXPOSE 3000
-
-# Run binary
 CMD ["./insightsx"]
