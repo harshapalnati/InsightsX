@@ -1,20 +1,17 @@
 use insightsx::config::AppConfig;
-use insightsx::kafka::consumer::KafkaConsumer;
-use chrono::Local;
-use serde_json;
+use insightsx::kafka::consumer::start_kafka_consumer;
+use insightsx::storage::clickhouse::LogStorage;
+use std::sync::Arc;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let config = AppConfig::from_env();
 
-    let brokers = vec![config.kafka_brokers.clone()];
-    let topic = config.kafka_topic.clone();
+    let storage = Arc::new(LogStorage::new(
+        &config.clickhouse_url,
+        &config.clickhouse_database,
+        &config.clickhouse_password,
+    ));
 
-    // Use the retry-enabled constructor instead of `new`
-    let mut kafka_consumer = KafkaConsumer::new_with_retry(brokers, &topic);
-
-    kafka_consumer.consume(|msg| {
-        let payload = serde_json::to_string(msg)
-            .unwrap_or_else(|_| "[Serialization Error]".to_string());
-        println!("{} ✅ Received Kafka message: {}", Local::now().format("%Y-%m-%d %H:%M:%S%.6f"), payload);
-    });
+    start_kafka_consumer(&config.kafka_brokers, &config.kafka_topic, storage).await;
 }

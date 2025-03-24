@@ -1,11 +1,10 @@
 use clickhouse::{Client, Row};
 use crate::models::log_entry::{LogEntry, LogLevel};
-use chrono::{Utc, TimeZone};
 use serde::{Serialize, Deserialize};
 use tracing::info;
 
 #[derive(Serialize, Deserialize, Row, Debug)]
-struct InsertLogRow {
+pub struct InsertLogRow {
     source: String,
     level: String,
     message: String,

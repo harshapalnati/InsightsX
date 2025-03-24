@@ -1,3 +1,5 @@
+// src/main.rs
+
 pub mod config;
 pub mod grpc;
 pub mod kafka;
@@ -7,14 +9,17 @@ pub mod ingestion;
 pub mod storage;
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, error};
-use models::log_entry::{LogEntry, LogLevel};
-use storage::clickhouse::LogStorage;
+
+use crate::models::log_entry::{LogEntry, LogLevel};
+use crate::storage::clickhouse::LogStorage;
+use crate::kafka::producer::KafkaProducer;
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing and metrics.
+    // Initialize tracing and metrics
     observability::tracing::init_tracing();
     info!("Tracing initialized");
 
@@ -23,104 +28,93 @@ async fn main() {
     });
     info!("Metrics server running on http://0.0.0.0:9898/metrics");
 
-    // Load application configuration.
+    // Load config
+    dotenv::dotenv().ok();
     let config = config::AppConfig::from_env();
 
-    // Initialize ClickHouse storage.
+    // Initialize ClickHouse
     info!("🔄 Initializing ClickHouse storage...");
     let storage = Arc::new(LogStorage::new(
-        "https://i0zbyfvwa7.us-east-1.aws.clickhouse.cloud:8443",
-        "default",
-        "yq3ELB.ONGWE_",
+        &config.clickhouse_url,
+        &config.clickhouse_database,
+        &config.clickhouse_password,
     ));
 
     if let Err(e) = storage.init_table().await {
-        eprintln!("❌ Failed to initialize ClickHouse table: {:?}", e);
+        error!("❌ Failed to initialize ClickHouse table: {:?}", e);
     } else {
         info!("✅ ClickHouse table initialized successfully!");
     }
 
-    // --- Manual Test Insert ---
-    let test_log = LogEntry {
-        source: "manual_test".into(),
-        level: LogLevel::INFO,
-        message: "Manual test message".into(),
-        client_timestamp: LogEntry::current_timestamp(),
-        server_timestamp: Some(LogEntry::current_timestamp()),
-        trace_id: None,
-        span_id: None,
-        service: None,
-        metadata: None,
-        log_type: None,
-    };
-    
+    // Manual test insert
+    let test_log = LogEntry::new_info("manual_test", "Manual test message");
     match storage.insert_log(&test_log).await {
-        Ok(_)  => info!("Manual insert succeeded"),
+        Ok(_) => info!("Manual insert succeeded"),
         Err(e) => error!("Manual insert failed: {:?}", e),
     }
-  
-    // Create a centralized channel for log entries.
-    let (tx, rx) = mpsc::channel::<LogEntry>(10_000);
+
+    // Log ingestion channel
+    let (tx, mut rx) = mpsc::channel::<LogEntry>(10_000);
     let tx = Arc::new(tx);
 
-    // Start ingestion endpoints.
+    // Start ingestion listeners
     let tcp_tx = tx.clone();
     tokio::spawn(async move {
         ingestion::tcp::start_tcp_server("0.0.0.0:6000", tcp_tx).await;
     });
-    info!("✅ TCP ingestion server started on 0.0.0.0:6000");
-
+    
     let udp_tx = tx.clone();
     tokio::spawn(async move {
         ingestion::udp::start_udp_listener("0.0.0.0:6001", udp_tx).await;
     });
-    info!("✅ UDP ingestion listener started on 0.0.0.0:6001");
-
+    
     let syslog_tx = tx.clone();
     tokio::spawn(async move {
         ingestion::syslog::start_syslog_listener("0.0.0.0:6002", syslog_tx).await;
     });
-    info!("✅ Syslog ingestion listener started on 0.0.0.0:6002");
+    
 
     let http_tx = tx.clone();
-    tokio::spawn(async move {
-        ingestion::http::run_ingest_api(http_tx).await;
-    });
+tokio::spawn(async move {
+    let routes = ingestion::http::http_filter(http_tx);
+    warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
+});
+
     info!("✅ HTTP ingestion API started on port 8080");
 
-    // Initialize Kafka producer.
-    let mut kafka_producer = kafka::producer::KafkaProducer::new(
+    // Kafka producer
+    let kafka_producer = KafkaProducer::new(
         &config.kafka_brokers,
         &config.kafka_topic,
-        1, // Lower batch size for testing.
+        50, // batch size
+        Duration::from_secs(1), // flush interval
     );
+    
     info!("✅ Kafka producer initialized for topic: {}", config.kafka_topic);
 
-    // Forward logs from the centralized channel to Kafka.
-    let mut rx = rx;
+    // Kafka forwarder
     tokio::spawn(async move {
-        info!("🚀 Starting log stream to Kafka pipeline");
+        info!("🚀 Forwarding logs to Kafka...");
         while let Some(log) = rx.recv().await {
             if let Ok(payload) = rmp_serde::to_vec(&log) {
-                kafka_producer.send(&payload).await;
+                kafka_producer.send(payload).await;
             }
         }
         kafka_producer.flush().await;
     });
 
-    // Start Kafka consumer to insert logs into ClickHouse.
-    let kafka_brokers = config.kafka_brokers.clone();
-    let kafka_topic = config.kafka_topic.clone();
-    let storage_clone = storage.clone();
+    // Kafka consumer → ClickHouse
+    let storage_clone = Arc::clone(&storage);
+    let brokers = config.kafka_brokers.clone();
+    let topic = config.kafka_topic.clone();
     tokio::spawn(async move {
-        info!("🔄 Starting Kafka consumer for ClickHouse ingestion");
-        kafka::consumer::start_kafka_consumer(kafka_brokers, kafka_topic, storage_clone).await;
+        info!("🔄 Starting Kafka consumer for ClickHouse...");
+        kafka::consumer::start_kafka_consumer(&brokers, &topic, storage_clone).await;
     });
 
-    // Start gRPC server.
+    // gRPC server
     let grpc_addr = config.grpc_address.clone();
     tokio::spawn(async move {
-        info!("🔄 Starting gRPC server on {}", grpc_addr);
         if let Err(e) = grpc::server::start_grpc_server(&grpc_addr).await {
             error!("❌ gRPC server failed: {}", e);
         }

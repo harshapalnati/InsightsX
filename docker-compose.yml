@@ -1,21 +1,26 @@
 version: "3.8"
 
 services:
-  # 🚀 InsightsX gRPC Server (with metrics endpoint)
+  # 🚀 InsightsX gRPC Server (with metrics and ingestion endpoints)
   insightsx:
     build: .
     ports:
       - "50051:50051"   # gRPC
       - "9898:9898"     # Prometheus metrics
-      - "8080:8080"     # HTTP testing/debug
+      - "8080:8080"     # HTTP ingestion/testing/debug
+      - "6000:6000"     # TCP ingestion endpoint
+      - "6002:6002/udp" # Syslog ingestion endpoint (UDP)
     environment:
+      RUST_LOG: debug
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC: insightx-logs
       GRPC_ADDRESS: 0.0.0.0:50051
+      CLICKHOUSE_URL: https://i0zbyfvwa7.us-east-1.aws.clickhouse.cloud:8443
+      CLICKHOUSE_DATABASE: default
+      CLICKHOUSE_PASSWORD: yq3ELB.ONGWE_
     depends_on:
       kafka:
         condition: service_healthy
-      
 
   # 🔄 Kafka Log Consumer
   log_consumer:
@@ -24,11 +29,9 @@ services:
     environment:
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC: insightx-logs
-   
     depends_on:
       kafka:
         condition: service_healthy
-      
 
   # ⚙️ Benchmark Utility
   benchmark:
@@ -37,7 +40,6 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-
 
   # 🏢 Kafka Broker
   kafka:
@@ -69,7 +71,7 @@ services:
     ports:
       - "2181:2181"
     healthcheck:
-      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "2181"]
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181"]
       interval: 10s
       retries: 5
       start_period: 10s

@@ -29,4 +29,19 @@ impl LogEntry {
     pub fn current_timestamp() -> i64 {
         chrono::Utc::now().timestamp_millis()
     }
+
+    pub fn new_info(source: &str, message: &str) -> Self {
+        Self {
+            source: source.to_string(),
+            level: LogLevel::INFO,
+            message: message.to_string(),
+            client_timestamp: Self::current_timestamp(),
+            server_timestamp: Some(Self::current_timestamp()),
+            trace_id: None,
+            span_id: None,
+            service: None,
+            metadata: None,
+            log_type: Some("manual".into()),
+        }
+    }
 }

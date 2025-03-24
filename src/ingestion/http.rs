@@ -4,64 +4,63 @@ use tracing::{info, error};
 use std::sync::Arc;
 use crate::models::log_entry::LogEntry;
 use bytes::Bytes;
-use serde_json;
+use simd_json::serde::from_slice;
 
 /// Sets up a filter that injects a shared sender.
-fn with_sender(sender: Arc<mpsc::Sender<LogEntry>>) 
-    -> impl warp::Filter<Extract = (Arc<mpsc::Sender<LogEntry>>,), Error = std::convert::Infallible> + Clone 
+fn with_sender(sender: Arc<mpsc::Sender<LogEntry>>)
+    -> impl warp::Filter<Extract = (Arc<mpsc::Sender<LogEntry>>,), Error = std::convert::Infallible> + Clone
 {
     warp::any().map(move || sender.clone())
 }
 
 /// Ingestion endpoint handler. Parses the request body as JSON and sets the server timestamp.
-async fn handle_ingest(body: Bytes, sender: Arc<mpsc::Sender<LogEntry>>) 
-    -> Result<impl warp::Reply, warp::Rejection> 
+async fn handle_ingest(body: Bytes, sender: Arc<mpsc::Sender<LogEntry>>)
+    -> Result<impl warp::Reply, warp::Rejection>
 {
-    // Convert request body to a UTF-8 string.
-    let body_str = match std::str::from_utf8(&body) {
-        Ok(s) => s,
-        Err(_) => {
-            error!("Invalid UTF-8 in HTTP body");
-            return Ok(warp::reply::with_status("Invalid UTF-8", warp::http::StatusCode::BAD_REQUEST));
+    let mut input = body.to_vec();
+
+    // Peek the first non-whitespace byte to determine if input is array or object
+    let first_char = input.iter().find(|&&b| !b.is_ascii_whitespace());
+
+    match first_char {
+        Some(b'[') => {
+            match from_slice::<Vec<LogEntry>>(&mut input) {
+                Ok(logs) => {
+                    for log in logs {
+                        if let Err(e) = sender.send(log).await {
+                            error!("Failed to send log: {}", e);
+                        }
+                    }
+                    Ok(warp::reply::with_status("Batch Received", warp::http::StatusCode::OK))
+                }
+                Err(e) => {
+                    error!("Failed to parse batch: {}", e);
+                    Ok(warp::reply::with_status("Invalid batch", warp::http::StatusCode::BAD_REQUEST))
+                }
+            }
         }
-    };
-
-    info!("Received HTTP ingestion payload: {}", body_str);
-
-    // Try parsing as an array first, then as a single log.
-    let mut logs: Vec<LogEntry> = if let Ok(parsed) = serde_json::from_str::<Vec<LogEntry>>(body_str) {
-        parsed
-    } else if let Ok(single) = serde_json::from_str::<LogEntry>(body_str) {
-        vec![single]
-    } else {
-        error!("Failed to parse JSON for LogEntry");
-        return Ok(warp::reply::with_status("Bad Request", warp::http::StatusCode::BAD_REQUEST));
-    };
-
-    // Override or set the server_timestamp to the current time for each log.
-    for log in logs.iter_mut() {
-        log.server_timestamp = Some(LogEntry::current_timestamp());
-    }
-
-    // Send logs via the MPSC channel.
-    for log in logs {
-        if let Err(_) = sender.send(log).await {
-            error!("Log queue is full, dropping HTTP log");
-            return Ok(warp::reply::with_status("Queue Full", warp::http::StatusCode::SERVICE_UNAVAILABLE));
+        Some(b'{') => {
+            match from_slice::<LogEntry>(&mut input) {
+                Ok(log) => {
+                    if let Err(e) = sender.send(log).await {
+                        error!("Failed to send log: {}", e);
+                    }
+                    Ok(warp::reply::with_status("Log Received", warp::http::StatusCode::OK))
+                }
+                Err(e) => {
+                    error!("Failed to parse log: {}", e);
+                    Ok(warp::reply::with_status("Invalid log", warp::http::StatusCode::BAD_REQUEST))
+                }
+            }
         }
+        _ => Ok(warp::reply::with_status("Empty or unknown input", warp::http::StatusCode::BAD_REQUEST))
     }
-
-    Ok(warp::reply::with_status("Logs Ingested", warp::http::StatusCode::OK))
 }
 
-/// Starts the HTTP ingestion API.
-pub async fn run_ingest_api(sender: Arc<mpsc::Sender<LogEntry>>) {
-    let ingest_route = warp::post()
-        .and(warp::path("ingest"))
+pub fn http_filter(sender: Arc<mpsc::Sender<LogEntry>>) -> impl warp::Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path("logs")
+        .and(warp::post())
         .and(warp::body::bytes())
         .and(with_sender(sender))
-        .and_then(handle_ingest);
-
-    info!("HTTP Ingestion API running on 0.0.0.0:8080/ingest");
-    warp::serve(ingest_route).run(([0, 0, 0, 0], 8080)).await;
+        .and_then(handle_ingest)
 }

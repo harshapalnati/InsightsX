@@ -2,10 +2,20 @@
 FROM rust:latest AS builder
 
 # ✅ Install protobuf compiler
+# ✅ Install protobuf + build deps for rdkafka
 RUN apt-get update && \
-    apt-get install -y protobuf-compiler && \
+    apt-get install -y \
+    protobuf-compiler \
+    cmake \
+    pkg-config \
+    libssl-dev \
+    libsasl2-dev \
+    zlib1g-dev \
+    curl \
+    build-essential && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
 
 WORKDIR /usr/src/insightsx
 
